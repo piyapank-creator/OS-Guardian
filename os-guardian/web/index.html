@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OS Guardian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=IBM+Plex+Sans+Thai:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e6ecf0;--panel:#f6f8f9;--ink:#15212b;--muted:#5a6a77;--line:#c8d2da;--ok:#0d7a68;--bad:#c2185b;--badbg:#fbe4ed}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121a21;--panel:#1a242d;--ink:#e4ecf1;--muted:#8fa1ae;--line:#2c3a46;--ok:#3ec9ae;--bad:#ff5c93;--badbg:#3a1a28}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "IBM Plex Sans Thai",system-ui,sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 20px 40px}
+header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px}
+h1{font:800 20px "Bricolage Grotesque",system-ui,sans-serif;margin:0;letter-spacing:-.01em}
+.live{color:var(--muted);font-size:13px}
+.live i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px}
+.live.off i{background:var(--bad)}
+@media (prefers-reduced-motion:no-preference){.live:not(.off) i{animation:p 2s infinite}@keyframes p{50%{opacity:.35}}}
+.status{background:var(--panel);border:1px solid var(--line);border-left:8px solid var(--ok);padding:18px 22px;margin-bottom:16px}
+.status.bad{background:var(--badbg);border-color:var(--bad)}
+.status h2{font:800 clamp(26px,4.5vw,44px)/1.1 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 6px;letter-spacing:-.02em;overflow-wrap:anywhere}
+.status.bad h2{color:var(--bad)}
+.status p{margin:0;color:var(--muted)}
+.grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);padding:16px 18px;min-width:0}
+h3{font:600 15px "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 10px}
+svg{width:100%;height:auto;display:block}
+.meter{margin:0 0 12px}.meter div{display:flex;justify-content:space-between;font-size:14px}
+.bar{height:10px;background:var(--line);margin-top:4px}.bar b{display:block;height:100%;background:var(--ok);transition:width .4s}
+.nums{display:flex;gap:28px;margin-top:6px}.nums strong{font:800 28px "Bricolage Grotesque",system-ui,sans-serif;display:block;line-height:1.1}.nums span{color:var(--muted);font-size:13px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:5px 10px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-weight:500;color:var(--muted);font-size:13px}td.n,th.n{text-align:right}
+tr.hl td{color:var(--bad);font-weight:500}
+ul{list-style:none;margin:0;padding:0}li{padding:5px 0;border-bottom:1px solid var(--line);font-size:14px}li time{color:var(--muted);margin-right:10px;font-variant-numeric:tabular-nums}
+.empty{color:var(--muted);padding:40px 10px;text-align:center}
+.full{grid-column:1/-1}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>OS Guardian</h1><div class="live" id="live"><i></i><span id="clock">กำลังเชื่อมต่อ…</span></div></header>
+
+<div class="status" id="status"><h2>ไม่พบ Deadlock</h2><p>กำลังตรวจสอบ…</p></div>
+
+<div class="grid">
+  <section>
+    <h3>Wait-for Graph</h3>
+    <div id="graph"></div>
+  </section>
+  <section>
+    <h3>ทรัพยากรของระบบ</h3>
+    <div class="meter"><div><span>CPU</span><span id="cpuT">–</span></div><div class="bar"><b id="cpuB" style="width:0"></b></div></div>
+    <div class="meter"><div><span>Memory</span><span id="memT">–</span></div><div class="bar"><b id="memB" style="width:0"></b></div></div>
+    <div class="nums"><div><strong id="nproc">–</strong><span>Process</span></div><div><strong id="nthr">–</strong><span>Thread</span></div><div><strong id="nwait">–</strong><span>กำลังรอ Resource</span></div></div>
+    <h3 style="margin-top:20px">เหตุการณ์</h3>
+    <ul id="hist"><li class="empty">ยังไม่มีเหตุการณ์</li></ul>
+  </section>
+  <section class="full">
+    <h3>Process ที่ใช้ CPU สูงสุด</h3>
+    <div class="scroll"><table><thead><tr><th class="n">PID</th><th>ชื่อ</th><th>State</th><th class="n">CPU %</th><th class="n">Memory (MB)</th><th class="n">Thread</th></tr></thead><tbody id="rows"></tbody></table></div>
+  </section>
+</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!=null)e.textContent=text;return e}
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+
+function drawGraph(d){
+  const box=$('graph'); box.textContent='';
+  const edges=d.graph;
+  if(!edges.length){box.innerHTML='<div class="empty">ยังไม่มี Process ที่รอ Resource<br>ลองรัน <b>./bin/deadlock_demo deadlock 3</b></div>';return}
+  const inCycle=new Set(), cyc=new Set();
+  d.deadlock.cycles.forEach(c=>c.pids.forEach((p,i)=>{inCycle.add(p);cyc.add(p+'>'+c.pids[(i+1)%c.pids.length])}));
+  // show cycle members first, cap the picture at 24 nodes
+  let nodes=[...new Set(edges.flatMap(e=>[e.from,e.to]))].sort((a,b)=>(inCycle.has(b)-inCycle.has(a))||a-b);
+  const total=nodes.length; nodes=nodes.slice(0,24);
+  const pos={}, R=nodes.length<3?90:150, cx=210, cy=210;
+  nodes.forEach((p,i)=>{const a=-Math.PI/2+i*2*Math.PI/nodes.length;pos[p]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)}});
+  const svg=el('svg',{viewBox:'0 0 420 420',role:'img','aria-label':'Wait-for graph'});
+  const defs=el('defs',{});
+  [['a-ok',css('--muted')],['a-bad',css('--bad')]].forEach(([id,c])=>{
+    const m=el('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'});
+    m.appendChild(el('path',{d:'M0 0L10 5L0 10z',fill:c}));defs.appendChild(m)});
+  svg.appendChild(defs);
+  const r=20;
+  edges.forEach(e=>{
+    const a=pos[e.from],b=pos[e.to]; if(!a||!b)return;
+    const bad=cyc.has(e.from+'>'+e.to), col=bad?css('--bad'):css('--muted');
+    const dx=b.x-a.x,dy=b.y-a.y,L=Math.hypot(dx,dy)||1, ux=dx/L,uy=dy/L;
+    const sx=a.x+ux*r,sy=a.y+uy*r,ex=b.x-ux*(r+5),ey=b.y-uy*(r+5);
+    const mx=(sx+ex)/2-uy*26,my=(sy+ey)/2+ux*26;             // curve so opposite edges don't overlap
+    svg.appendChild(el('path',{d:`M${sx} ${sy}Q${mx} ${my} ${ex} ${ey}`,fill:'none',stroke:col,'stroke-width':bad?2.5:1.5,'marker-end':`url(#${bad?'a-bad':'a-ok'})`}));
+    const lx=(sx+ex)/4+mx/2, ly=(sy+ey)/4+my/2;
+    svg.appendChild(el('text',{x:lx,y:ly,'text-anchor':'middle','font-size':11,fill:col,'paint-order':'stroke',stroke:css('--panel'),'stroke-width':3},e.res));
+  });
+  nodes.forEach(p=>{
+    const bad=inCycle.has(p), g=el('g',{});
+    g.appendChild(el('circle',{cx:pos[p].x,cy:pos[p].y,r,fill:bad?css('--bad'):css('--panel'),stroke:bad?css('--bad'):css('--ink'),'stroke-width':1.5}));
+    g.appendChild(el('text',{x:pos[p].x,y:pos[p].y+4,'text-anchor':'middle','font-size':10.5,'font-weight':500,fill:bad?'#fff':css('--ink')},p));
+    const nm=d.names[p]; if(nm){const t=el('title',{},nm+' (PID '+p+')');g.appendChild(t)}
+    svg.appendChild(g);
+  });
+  box.appendChild(svg);
+  if(total>nodes.length){const n=document.createElement('p');n.className='live';n.textContent=`แสดง ${nodes.length} จาก ${total} Process`;box.appendChild(n)}
+}
+
+function render(d){
+  $('live').classList.remove('off'); $('clock').textContent='อัปเดตล่าสุด '+d.time;
+  const s=d.sys, mem=s.mem_total_kb?100*(s.mem_total_kb-s.mem_avail_kb)/s.mem_total_kb:0;
+  $('cpuT').textContent=s.cpu.toFixed(0)+'%'; $('cpuB').style.width=Math.min(100,s.cpu)+'%';
+  $('memT').textContent=mem.toFixed(0)+'%  ('+((s.mem_total_kb-s.mem_avail_kb)/1048576).toFixed(1)+' / '+(s.mem_total_kb/1048576).toFixed(1)+' GB)'; $('memB').style.width=mem+'%';
+  $('nproc').textContent=s.nproc; $('nthr').textContent=s.nthreads; $('nwait').textContent=d.waits.length;
+
+  const st=$('status'), dl=d.deadlock, nm=p=>'P'+p;
+  st.classList.toggle('bad',dl.active);
+  const h=st.querySelector('h2'), p=st.querySelector('p');
+  if(dl.active){
+    const c=dl.cycles[0], ids=c.pids.slice(0,6).map(nm);
+    h.textContent='Deadlock: '+ids.join(' → ')+(c.pids.length>6?' → … ':' ')+(c.pids.length>6?'':'→ '+nm(c.pids[0]));
+    p.textContent='Resource ที่เกี่ยวข้อง: '+[...new Set(c.res)].join(', ')+(dl.cycles.length>1?`  · พบทั้งหมด ${dl.cycles.length} วง`:'')+`  · ตรวจพบใน ${dl.detect_us.toFixed(0)} µs`;
+  }else{
+    h.textContent='ไม่พบ Deadlock';
+    p.textContent=`ตรวจ ${d.holds.length} การถือครอง และ ${d.waits.length} การรอ ใน ${dl.detect_us.toFixed(0)} µs`;
+  }
+  drawGraph(d);
+
+  const hi=new Set(dl.cycles.flatMap(c=>c.pids)), tb=$('rows'); tb.textContent='';
+  d.procs.slice(0,25).forEach(x=>{
+    const tr=document.createElement('tr'); if(hi.has(x.pid))tr.className='hl';
+    [[x.pid,'n'],[x.name,''],[x.state,''],[x.cpu.toFixed(1),'n'],[(x.rss_kb/1024).toFixed(1),'n'],[x.threads,'n']].forEach(([v,c])=>{const td=document.createElement('td');td.textContent=v;if(c)td.className=c;tr.appendChild(td)});
+    tb.appendChild(tr)});
+
+  const ul=$('hist'); ul.textContent='';
+  if(!d.history.length){ul.innerHTML='<li class="empty">ยังไม่มีเหตุการณ์</li>'}
+  d.history.slice(0,6).forEach(e=>{const li=document.createElement('li');const t=document.createElement('time');t.textContent=e.time;li.append(t,e.text);ul.appendChild(li)});
+}
+
+async function tick(){
+  try{const r=await fetch('/api/state',{cache:'no-store'});render(await r.json())}
+  catch(e){$('live').classList.add('off');$('clock').textContent='ขาดการเชื่อมต่อกับ Guardian'}
+}
+tick(); setInterval(tick,1000);
+</script>
+</body>
+</html>
