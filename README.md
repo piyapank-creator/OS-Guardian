@@ -104,3 +104,39 @@ make bench     # ได้ตารางและไฟล์ results.csv
 - รองรับ Resource แบบหลาย instance (semaphore นับ) ด้วย Banker's algorithm / Matrix-based detection
 - ปุ่ม Kill Process เพื่อแก้ Deadlock (Recovery)
 - ตรวจ `flock` จริงจาก `/proc/locks` โดยไม่ต้องให้โปรแกรมรายงาน
+## รันทดสอบ deadlock 2 ubuntu
+ทดสอบแล้วใช้ได้ครับ Guardian ตรวจพบ Deadlock ระหว่าง 2 shell ที่ล็อกไฟล์ไขว้กัน วิธีนี้เป็น Deadlock จริงจากคำสั่ง flock ไม่ต้องใช้ deadlock_demo
+
+ต้องมีคำสั่ง nc (netcat) ก่อน ถ้ายังไม่มีให้รัน sudo apt install -y netcat-openbsd
+
+เปิด Guardian ไว้ก่อน แล้วเปิด Ubuntu อีก 2 หน้าต่าง (เรียกว่า A กับ B)
+
+หน้าต่าง A วางทั้งก้อน แล้วกด Enter
+
+bash
+rep(){ echo "$1 $$ $2" | nc -U -u -w1 /tmp/osguardian.sock; }
+exec 3>/tmp/lockA 4>/tmp/lockB
+rep W LOCK_A; flock 3; rep H LOCK_A
+
+หน้าต่าง B วางแบบเดียวกัน
+
+bash
+rep(){ echo "$1 $$ $2" | nc -U -u -w1 /tmp/osguardian.sock; }
+exec 3>/tmp/lockA 4>/tmp/lockB
+rep W LOCK_B; flock 4; rep H LOCK_B
+
+ตอนนี้ A ถือ LOCK_A และ B ถือ LOCK_B ยังไม่มี Deadlock
+
+จากนั้นให้ต่างฝ่ายไปขออีกอัน
+
+หน้าต่าง A:
+
+bash
+rep W LOCK_B; flock 4; rep H LOCK_B
+
+หน้าต่าง B:
+
+bash
+rep W LOCK_A; flock 3; rep H LOCK_A
+
+ทั้งสองหน้าต่างจะค้างรอกัน Dashboard จะขึ้น Deadlock สีแดงพร้อมวงจร A → B → A และ Resource LOCK_A, LOCK_B
